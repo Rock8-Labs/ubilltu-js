@@ -1,0 +1,38 @@
+{
+  "name": "@ubilltu/react",
+  "version": "0.1.0",
+  "description": "React hooks and provider for the ubilltu subscription commerce API.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ubilltu/client": "^0.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=17"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "react": "^18.3.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rock8-Labs/ubilltu-js",
+    "directory": "packages/react"
+  }
+}

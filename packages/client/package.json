@@ -1,0 +1,29 @@
+{
+  "name": "@ubilltu/client",
+  "version": "0.1.0",
+  "description": "Official TypeScript/JavaScript client for the ubilltu subscription commerce API.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rock8-Labs/ubilltu-js",
+    "directory": "packages/client"
+  }
+}

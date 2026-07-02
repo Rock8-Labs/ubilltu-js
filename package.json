@@ -1,0 +1,19 @@
+{
+  "name": "ubilltu-js",
+  "private": true,
+  "description": "ubilltu JavaScript/TypeScript SDK monorepo",
+  "workspaces": [
+    "packages/client",
+    "packages/react"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
