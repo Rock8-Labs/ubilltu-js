@@ -10,6 +10,11 @@ A monorepo of two packages:
 
 The core is the same everywhere; React just gets idiomatic hooks. (Vue/Svelte/etc. bindings can be added the same way later.)
 
+> **Install:** these are being published to npm shortly (`@ubilltu/client`, `@ubilltu/react`). Until
+> then, clone this repo (`npm install && npm run build`) — the monorepo's internal
+> `@ubilltu/react` → `@ubilltu/client` link resolves cleanly via npm, so npm is the recommended
+> install path for the JS SDK.
+
 ## Core client — Node / browser / anywhere
 
 ```bash
