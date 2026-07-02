@@ -75,13 +75,23 @@ export class UbilltuClient {
     return (this._tokens = toTokens(data));
   }
 
-  /** Register a new subscriber. Stores the session if the API returns tokens. */
+  /**
+   * Register a new subscriber. Stores the session if the API returns tokens.
+   * The API requires `tos_accepted` (the caller's user must accept the Terms of
+   * Service); it defaults to `true` here for convenience.
+   */
   async register(input: {
     email: string;
     password: string;
     name?: string;
+    tosAccepted?: boolean;
   }): Promise<Tokens> {
-    const data = await this._post('/api/v1/auth/register', input, false);
+    const { tosAccepted = true, ...rest } = input;
+    const data = await this._post(
+      '/api/v1/auth/register',
+      { ...rest, tos_accepted: tosAccepted },
+      false,
+    );
     const tokens = toTokens(data);
     if (tokens.accessToken) this._tokens = tokens;
     return tokens;
@@ -317,7 +327,12 @@ export class UbilltuClient {
         const parsed = JSON.parse(text);
         if (parsed && typeof parsed === 'object') {
           body = parsed as Json;
-          message = body['detail'] ?? body['message'] ?? message;
+          const err = body['error'];
+          message =
+            (err && typeof err === 'object' ? err['message'] : undefined) ??
+            body['detail'] ??
+            body['message'] ??
+            message;
         }
       }
     } catch {
@@ -352,12 +367,17 @@ function toPlan(r: Json): Plan {
   const trial = phases.find(
     (p) => (p['phase_type'] ?? p['phaseType']) === 'TRIAL',
   );
+  // The API returns price/currency inside a `prices[]` array and the display
+  // name in `product_name`; fall back to flat fields for safety.
+  const prices: Json[] = Array.isArray(r['prices']) ? r['prices'] : [];
+  const first: Json = prices[0] ?? {};
   return {
-    id: String(r['id'] ?? r['plan_id'] ?? r['name'] ?? ''),
-    name: String(r['name'] ?? r['plan_name'] ?? ''),
-    price: r['price'] ?? r['amount'] ?? undefined,
-    currency: r['currency'] ?? undefined,
-    billingPeriod: r['billing_period'] ?? r['billingPeriod'] ?? undefined,
+    id: String(r['plan_id'] ?? r['id'] ?? r['plan_name'] ?? r['name'] ?? ''),
+    name: String(r['product_name'] ?? r['plan_name'] ?? r['name'] ?? ''),
+    price: r['price'] ?? r['amount'] ?? first['amount'] ?? undefined,
+    currency: r['currency'] ?? first['currency'] ?? undefined,
+    billingPeriod:
+      r['billing_period'] ?? r['billingPeriod'] ?? first['billing_period'] ?? undefined,
     trialDays: trial
       ? (trial['duration_length'] ?? trial['durationLength'] ?? undefined)
       : undefined,

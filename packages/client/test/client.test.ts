@@ -54,12 +54,13 @@ describe('UbilltuClient', () => {
     await expect(client.listPlans()).rejects.toBeInstanceOf(UbilltuAuthError);
   });
 
-  it('maps a non-2xx response to UbilltuApiError with status + detail', async () => {
+  it('maps a non-2xx response to UbilltuApiError (nested error.message)', async () => {
     const f = fakeFetch(({ url }) => {
       if (url.pathname === '/api/v1/auth/login') {
         return { json: { access_token: 't' } };
       }
-      return { status: 402, json: { detail: 'no active subscription' } };
+      // The API nests error messages as { error: { message } }.
+      return { status: 402, json: { error: { message: 'no active subscription' } } };
     });
     const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
     await client.login('a@b.com', 'pw');
@@ -71,16 +72,18 @@ describe('UbilltuClient', () => {
     });
   });
 
-  it('parses a plans page into typed models (incl. trialDays from a TRIAL phase)', async () => {
+  it('parses a plans page using the real API shape (product_name + prices[])', async () => {
     const f = fakeFetch(({ url }) => {
       if (url.pathname === '/api/v1/auth/login') return { json: { access_token: 't' } };
       return {
         json: {
           items: [
             {
-              name: 'premium-monthly',
-              price: 149,
-              currency: 'ZAR',
+              plan_id: 'lite-monthly',
+              plan_name: 'lite-monthly',
+              product_name: 'Lite',
+              billing_period: 'MONTHLY',
+              prices: [{ currency: 'ZAR', amount: 50, billing_period: 'MONTHLY' }],
               phases: [
                 { phase_type: 'TRIAL', duration_length: 14 },
                 { phase_type: 'EVERGREEN' },
@@ -96,10 +99,23 @@ describe('UbilltuClient', () => {
     const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
     await client.login('a@b.com', 'pw');
 
-    const plans = await client.listPlans();
-    expect(plans.items[0]!.name).toBe('premium-monthly');
-    expect(plans.items[0]!.price).toBe(149);
-    expect(plans.items[0]!.trialDays).toBe(14);
+    const plan = (await client.listPlans()).items[0]!;
+    expect(plan.id).toBe('lite-monthly'); // slug — used for subscribe()
+    expect(plan.name).toBe('Lite'); // product display name
+    expect(plan.price).toBe(50); // from prices[]
+    expect(plan.currency).toBe('ZAR'); // from prices[]
+    expect(plan.billingPeriod).toBe('MONTHLY');
+    expect(plan.trialDays).toBe(14);
+  });
+
+  it('register sends tos_accepted', async () => {
+    const f = fakeFetch(() => ({ json: { access_token: 't' } }));
+    const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
+    await client.register({ email: 'new@example.com', password: 'password123' });
+    expect(f.last().body).toMatchObject({
+      email: 'new@example.com',
+      tos_accepted: true,
+    });
   });
 
   it('changePlan sends a PUT with plan_id + billing_policy', async () => {
