@@ -29,6 +29,7 @@ Requires `fetch` (Node ≥ 18 or a browser). On older Node, pass one: `new Ubill
 | Plans | `listPlans`, `getPlan` |
 | Subscriptions | `listSubscriptions`, `getSubscription`, `subscribe`, `changePlan`, `previewChange`, `cancelSubscription`, `pauseSubscription`, `resumeSubscription`, `reactivateSubscription` |
 | Invoices | `listInvoices`, `getInvoice`, `invoicePdf` |
+| Payments | `listPaymentMethods`, `setupPaymentMethod`, `signup`, `checkout` |
 
 List endpoints return a `Page<T>` (`{ items, total, page, perPage }`). Typed models
 (`Plan`, `Subscription`, `Invoice`, `Payment`) surface common fields plus `.raw` for the

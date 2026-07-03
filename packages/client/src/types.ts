@@ -33,7 +33,10 @@ export interface Plan {
 export interface Subscription {
   id: string;
   planName?: string;
+  productName?: string;
   state?: string;
+  price?: number;
+  currency?: string;
   raw: Json;
 }
 
@@ -52,5 +55,16 @@ export interface Payment {
   amount?: number;
   currency?: string;
   status?: string;
+  raw: Json;
+}
+
+/** A saved payment method (card on file). */
+export interface PaymentMethod {
+  id: string;
+  isDefault: boolean;
+  cardBrand?: string;
+  cardLast4?: string;
+  expiryMonth?: number;
+  expiryYear?: number;
   raw: Json;
 }

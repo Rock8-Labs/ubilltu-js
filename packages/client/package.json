@@ -1,6 +1,6 @@
 {
   "name": "@ubilltu/client",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Official TypeScript/JavaScript client for the ubilltu subscription commerce API.",
   "license": "MIT",
   "type": "module",

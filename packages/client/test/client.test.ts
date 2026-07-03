@@ -140,6 +140,55 @@ describe('UbilltuClient', () => {
     expect(s.state).toBe('ACTIVE');
   });
 
+  it('subscription surfaces productName + price', async () => {
+    const f = fakeFetch(({ url }) => {
+      if (url.pathname === '/api/v1/auth/login') return { json: { access_token: 't' } };
+      return {
+        json: {
+          items: [
+            {
+              subscription_id: 'sub_1',
+              plan_name: 'lite-monthly',
+              product_name: 'Lite',
+              state: 'ACTIVE',
+              price: 50,
+              currency: 'ZAR',
+            },
+          ],
+          total: 1,
+          page: 1,
+          per_page: 20,
+        },
+      };
+    });
+    const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
+    await client.login('a@b.com', 'pw');
+    const s = (await client.listSubscriptions()).items[0]!;
+    expect(s.productName).toBe('Lite');
+    expect(s.price).toBe(50);
+    expect(s.currency).toBe('ZAR');
+  });
+
+  it('signup + setupPaymentMethod post the right bodies', async () => {
+    const f = fakeFetch(({ url }) => {
+      if (url.pathname === '/api/v1/auth/login') return { json: { access_token: 't' } };
+      if (url.pathname.endsWith('/signup')) {
+        return { status: 201, json: { subscription_id: 'sub_1', redirect_url: 'https://pay/abc' } };
+      }
+      return { json: { redirect_url: 'https://pay/setup' } };
+    });
+    const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
+    await client.login('a@b.com', 'pw');
+
+    const su = await client.signup('lite-monthly', 'https://app/return');
+    expect(su['redirect_url']).toBe('https://pay/abc');
+    expect(f.last().body).toMatchObject({ plan_id: 'lite-monthly', return_url: 'https://app/return' });
+
+    const setup = await client.setupPaymentMethod('https://app/return', true);
+    expect(setup['redirect_url']).toBe('https://pay/setup');
+    expect(f.last().body).toMatchObject({ return_url: 'https://app/return', is_default: true });
+  });
+
   it('changePlan sends a PUT with plan_id + billing_policy', async () => {
     const f = fakeFetch(({ url }) => {
       if (url.pathname === '/api/v1/auth/login') return { json: { access_token: 't' } };

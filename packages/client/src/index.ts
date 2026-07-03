@@ -13,4 +13,5 @@ export type {
   Subscription,
   Invoice,
   Payment,
+  PaymentMethod,
 } from './types.js';

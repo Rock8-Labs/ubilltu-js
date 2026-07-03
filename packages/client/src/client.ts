@@ -4,6 +4,7 @@ import type {
   Json,
   Page,
   Payment,
+  PaymentMethod,
   Plan,
   Subscription,
   Tokens,
@@ -258,6 +259,51 @@ export class UbilltuClient {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  // -------------------------------------------------------------- Payments --
+
+  /** List the subscriber's saved payment methods (cards on file). */
+  async listPaymentMethods(): Promise<Page<PaymentMethod>> {
+    return toPage(await this._get('/api/v1/payments/methods'), toPaymentMethod);
+  }
+
+  /**
+   * Start a zero-amount card-on-file setup. Returns `{ redirect_url }` — send
+   * the customer to that hosted page to enter their card.
+   */
+  setupPaymentMethod(returnUrl: string, isDefault = false): Promise<Json> {
+    return this._post('/api/v1/payments/methods/setup', {
+      return_url: returnUrl,
+      is_default: isDefault,
+    });
+  }
+
+  /**
+   * Subscribe to a plan AND start payment collection in one call. Returns
+   * `{ subscription_id, payment_id, redirect_url }` — the subscription exists
+   * immediately; send the customer to `redirect_url` to pay the first invoice.
+   */
+  signup(planId: string, returnUrl: string): Promise<Json> {
+    return this._post('/api/v1/subscriptions/signup', {
+      plan_id: planId,
+      return_url: returnUrl,
+    });
+  }
+
+  /** Start a hosted checkout for an amount. Returns `{ payment_id, redirect_url }`. */
+  checkout(input: {
+    amount: number;
+    currency?: string;
+    invoiceId?: string;
+    subscriptionId?: string;
+  }): Promise<Json> {
+    return this._post('/api/v1/payments/checkout', {
+      amount: input.amount,
+      currency: input.currency ?? 'ZAR',
+      ...(input.invoiceId ? { invoice_id: input.invoiceId } : {}),
+      ...(input.subscriptionId ? { subscription_id: input.subscriptionId } : {}),
+    });
+  }
+
   // ------------------------------------------------------------- internals --
 
   private _headers(json = false): Record<string, string> {
@@ -395,7 +441,22 @@ function toSubscription(r: Json): Subscription {
   return {
     id: String(s['subscription_id'] ?? s['id'] ?? ''),
     planName: s['plan_name'] ?? s['planName'] ?? undefined,
+    productName: s['product_name'] ?? s['productName'] ?? undefined,
     state: s['state'] ?? s['status'] ?? undefined,
+    price: s['price'] ?? undefined,
+    currency: s['currency'] ?? undefined,
+    raw: r,
+  };
+}
+
+function toPaymentMethod(r: Json): PaymentMethod {
+  return {
+    id: String(r['payment_method_id'] ?? r['id'] ?? ''),
+    isDefault: Boolean(r['is_default']),
+    cardBrand: r['card_brand'] ?? undefined,
+    cardLast4: r['card_last_four'] ?? r['last4'] ?? undefined,
+    expiryMonth: r['expiry_month'] ?? undefined,
+    expiryYear: r['expiry_year'] ?? undefined,
     raw: r,
   };
 }
