@@ -118,6 +118,28 @@ describe('UbilltuClient', () => {
     });
   });
 
+  it('getSubscription unwraps the detail { subscription, events } shape', async () => {
+    const f = fakeFetch(({ url }) => {
+      if (url.pathname === '/api/v1/auth/login') return { json: { access_token: 't' } };
+      return {
+        json: {
+          subscription: {
+            subscription_id: 'sub_1',
+            plan_name: 'premium-monthly',
+            state: 'ACTIVE',
+          },
+          events: [],
+        },
+      };
+    });
+    const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
+    await client.login('a@b.com', 'pw');
+    const s = await client.getSubscription('sub_1');
+    expect(s.id).toBe('sub_1');
+    expect(s.planName).toBe('premium-monthly');
+    expect(s.state).toBe('ACTIVE');
+  });
+
   it('changePlan sends a PUT with plan_id + billing_policy', async () => {
     const f = fakeFetch(({ url }) => {
       if (url.pathname === '/api/v1/auth/login') return { json: { access_token: 't' } };

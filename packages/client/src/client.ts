@@ -386,10 +386,16 @@ function toPlan(r: Json): Plan {
 }
 
 function toSubscription(r: Json): Subscription {
+  // The detail endpoint wraps it as { subscription: {...}, events: [...] };
+  // the list returns it flat. Unwrap so both shapes parse.
+  const s: Json =
+    r['subscription'] && typeof r['subscription'] === 'object'
+      ? r['subscription']
+      : r;
   return {
-    id: String(r['subscription_id'] ?? r['id'] ?? ''),
-    planName: r['plan_name'] ?? r['planName'] ?? undefined,
-    state: r['state'] ?? r['status'] ?? undefined,
+    id: String(s['subscription_id'] ?? s['id'] ?? ''),
+    planName: s['plan_name'] ?? s['planName'] ?? undefined,
+    state: s['state'] ?? s['status'] ?? undefined,
     raw: r,
   };
 }
