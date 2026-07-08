@@ -154,6 +154,19 @@ export class UbilltuClient {
     return toPage(await this._get('/api/v1/account/payments'), toPayment);
   }
 
+  /**
+   * Right-to-erasure (GDPR Art. 17 / POPIA s24). Cancels subscriptions, scrubs
+   * PII, and pseudonymizes the account — IRREVERSIBLE. `confirmEmail` must match
+   * the account email; `confirmPhrase` must be exactly `"ERASE"`. Returns
+   * `{ erasure_id, erased_fields }`.
+   */
+  eraseAccount(confirmEmail: string, confirmPhrase = 'ERASE'): Promise<Json> {
+    return this._post('/api/v1/account/erase', {
+      confirm_email: confirmEmail,
+      confirm_phrase: confirmPhrase,
+    });
+  }
+
   // ----------------------------------------------------------------- Plans --
 
   /** List available plans from the tenant catalog. */
@@ -235,6 +248,14 @@ export class UbilltuClient {
   }
 
   /** Reactivate a cancelled subscription. */
+  /** Whether the customer may self-resume this (paused) subscription (SEC-019). */
+  async selfResumeAllowed(id: string): Promise<boolean> {
+    const r = await this._get(
+      `/api/v1/subscriptions/${encodeURIComponent(id)}/self-resume-allowed`,
+    );
+    return Boolean(r['allowed']);
+  }
+
   async reactivateSubscription(id: string): Promise<Subscription> {
     return toSubscription(
       await this._post(
@@ -264,6 +285,16 @@ export class UbilltuClient {
     );
     if (!res.ok) await this._throw(res);
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  /** Render an invoice as branded HTML (string). */
+  async invoiceHtml(invoiceId: string): Promise<string> {
+    const res = await this._fetch(
+      `${this.baseUrl}/api/v1/invoices/${encodeURIComponent(invoiceId)}/html`,
+      { headers: this._headers() },
+    );
+    if (!res.ok) await this._throw(res);
+    return res.text();
   }
 
   // ---------------------------------------------------------------- Family --
@@ -332,6 +363,52 @@ export class UbilltuClient {
   /** List the subscriber's saved payment methods (cards on file). */
   async listPaymentMethods(): Promise<Page<PaymentMethod>> {
     return toPage(await this._get('/api/v1/payments/methods'), toPaymentMethod);
+  }
+
+  /** Save a payment method from a PSP card token. */
+  async addPaymentMethod(cardToken: string, isDefault = false): Promise<PaymentMethod> {
+    return toPaymentMethod(
+      await this._post('/api/v1/payments/methods', {
+        card_token: cardToken,
+        is_default: isDefault,
+      }),
+    );
+  }
+
+  /** Remove a saved payment method (re-promotes another card if it was default). */
+  deletePaymentMethod(methodId: string): Promise<Json> {
+    return this._delete(`/api/v1/payments/methods/${encodeURIComponent(methodId)}`);
+  }
+
+  /** Make a saved payment method the account default. */
+  setDefaultPaymentMethod(methodId: string): Promise<Json> {
+    return this._put(
+      `/api/v1/payments/methods/${encodeURIComponent(methodId)}/default`,
+      {},
+    );
+  }
+
+  /** Ensure the account default points at a real, chargeable card. */
+  reconcileDefaultPaymentMethod(): Promise<Json> {
+    return this._post('/api/v1/payments/methods/reconcile-default', {});
+  }
+
+  /** Fetch a single payment's live status (reconciles PENDING with the gateway). */
+  async getPayment(paymentId: string): Promise<Payment> {
+    return toPayment(
+      await this._get(`/api/v1/payments/${encodeURIComponent(paymentId)}`),
+    );
+  }
+
+  /**
+   * Make an ad-hoc / one-off payment. `source` describes what to pay
+   * (`{ type: 'ad_hoc', amount, currency, description }`, or `{ type: 'invoice',
+   * invoice_id }` / `{ type: 'addon', plan_id }`); `settlement` describes how
+   * (`{ mode: 'saved', payment_method_id }` or `{ mode: 'hosted', return_url }`).
+   * Returns the raw response (`status`, `requires_redirect`, `redirect_url`, `payment_id`).
+   */
+  createOneOffPayment(source: Json, settlement: Json): Promise<Json> {
+    return this._post('/api/v1/payments/one-off', { source, settlement });
   }
 
   /**
