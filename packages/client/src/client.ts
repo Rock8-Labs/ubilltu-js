@@ -1,6 +1,8 @@
 import { UbilltuApiError, UbilltuAuthError } from './errors.js';
 import type {
+  AccountBalance,
   Invoice,
+  InvoiceItem,
   Json,
   Page,
   Payment,
@@ -8,6 +10,7 @@ import type {
   Plan,
   Subscription,
   Tokens,
+  UsageMetrics,
 } from './types.js';
 
 export interface UbilltuClientOptions {
@@ -132,14 +135,14 @@ export class UbilltuClient {
     return this._put('/api/v1/account', fields);
   }
 
-  /** The subscriber's account balance. */
-  balance(): Promise<Json> {
-    return this._get('/api/v1/account/balance');
+  /** The subscriber's outstanding balance + available credit. */
+  async balance(): Promise<AccountBalance> {
+    return toAccountBalance(await this._get('/api/v1/account/balance'));
   }
 
   /** The subscriber's usage metrics. */
-  usage(): Promise<Json> {
-    return this._get('/api/v1/account/usage');
+  async usage(): Promise<UsageMetrics> {
+    return toUsageMetrics(await this._get('/api/v1/account/usage'));
   }
 
   /** The subscriber's payment history. */
@@ -426,7 +429,11 @@ function toPlan(r: Json): Plan {
       r['billing_period'] ?? r['billingPeriod'] ?? first['billing_period'] ?? undefined,
     trialDays: trial
       ? (trial['duration_length'] ?? trial['durationLength'] ?? undefined)
-      : undefined,
+      : (r['trial_days'] ?? r['trialDays'] ?? undefined),
+    features: Array.isArray(r['features']) ? r['features'] : [],
+    billingMode: r['billing_mode'] ?? r['billingMode'] ?? undefined,
+    billingDay: r['billing_day'] ?? r['billingDay'] ?? undefined,
+    familyConfig: r['family_config'] ?? r['familyConfig'] ?? undefined,
     raw: r,
   };
 }
@@ -445,6 +452,20 @@ function toSubscription(r: Json): Subscription {
     state: s['state'] ?? s['status'] ?? undefined,
     price: s['price'] ?? undefined,
     currency: s['currency'] ?? undefined,
+    cancelledDate: s['cancelled_date'] ?? s['cancelledDate'] ?? undefined,
+    chargedThroughDate:
+      s['charged_through_date'] ?? s['chargedThroughDate'] ?? undefined,
+    billingEndDate: s['billing_end_date'] ?? s['billingEndDate'] ?? undefined,
+    mrrMonthly: s['mrr_monthly'] ?? s['mrrMonthly'] ?? undefined,
+    lastPaymentAmount: s['last_payment_amount'] ?? s['lastPaymentAmount'] ?? undefined,
+    lastPaymentDate: s['last_payment_date'] ?? s['lastPaymentDate'] ?? undefined,
+    lastPaymentCurrency:
+      s['last_payment_currency'] ?? s['lastPaymentCurrency'] ?? undefined,
+    events: Array.isArray(r['events'])
+      ? r['events']
+      : Array.isArray(s['events'])
+        ? s['events']
+        : [],
     raw: r,
   };
 }
@@ -461,12 +482,32 @@ function toPaymentMethod(r: Json): PaymentMethod {
   };
 }
 
+function toInvoiceItem(r: Json): InvoiceItem {
+  return {
+    description: r['description'] ?? undefined,
+    planName: r['plan_name'] ?? r['planName'] ?? undefined,
+    phase: r['phase'] ?? undefined,
+    amount: r['amount'] ?? undefined,
+    currency: r['currency'] ?? undefined,
+    startDate: r['start_date'] ?? r['startDate'] ?? undefined,
+    endDate: r['end_date'] ?? r['endDate'] ?? undefined,
+    raw: r,
+  };
+}
+
 function toInvoice(r: Json): Invoice {
+  const items: Json[] = Array.isArray(r['items']) ? r['items'] : [];
   return {
     id: String(r['invoice_id'] ?? r['id'] ?? ''),
     amount: r['amount'] ?? r['balance'] ?? undefined,
     currency: r['currency'] ?? undefined,
     status: r['status'] ?? undefined,
+    invoiceNumber: r['invoice_number'] ?? r['invoiceNumber'] ?? undefined,
+    invoiceDate: r['invoice_date'] ?? r['invoiceDate'] ?? undefined,
+    balance: r['balance'] ?? undefined,
+    creditAdj: r['credit_adj'] ?? r['creditAdj'] ?? undefined,
+    refundAdj: r['refund_adj'] ?? r['refundAdj'] ?? undefined,
+    items: items.map(toInvoiceItem),
     raw: r,
   };
 }
@@ -477,6 +518,64 @@ function toPayment(r: Json): Payment {
     amount: r['amount'] ?? r['purchased_amount'] ?? undefined,
     currency: r['currency'] ?? undefined,
     status: r['status'] ?? r['state'] ?? undefined,
+    paymentNumber: r['payment_number'] ?? r['paymentNumber'] ?? undefined,
+    paymentDate: r['payment_date'] ?? r['paymentDate'] ?? undefined,
+    invoiceId: r['invoice_id'] ?? r['invoiceId'] ?? undefined,
+    invoiceNumber: r['invoice_number'] ?? r['invoiceNumber'] ?? undefined,
+    refundedAmount: r['refunded_amount'] ?? r['refundedAmount'] ?? undefined,
+    description: r['description'] ?? undefined,
     raw: r,
   };
+}
+
+function toAccountBalance(r: Json): AccountBalance {
+  return {
+    balance: r['balance'] ?? undefined,
+    credit: r['credit'] ?? undefined,
+    currency: r['currency'] ?? undefined,
+    raw: r,
+  };
+}
+
+function toUsageMetrics(r: Json): UsageMetrics {
+  return {
+    totalSubscriptions: r['total_subscriptions'] ?? r['totalSubscriptions'] ?? undefined,
+    activeSubscriptions:
+      r['active_subscriptions'] ?? r['activeSubscriptions'] ?? undefined,
+    totalInvoices: r['total_invoices'] ?? r['totalInvoices'] ?? undefined,
+    unpaidInvoices: r['unpaid_invoices'] ?? r['unpaidInvoices'] ?? undefined,
+    totalSpent: r['total_spent'] ?? r['totalSpent'] ?? undefined,
+    currency: r['currency'] ?? undefined,
+    raw: r,
+  };
+}
+
+// ── Lifecycle helpers (parity with the Python SDK's model properties) ────────
+
+/** A pending end-of-term cancel: `cancelledDate` set while still ACTIVE (keeps
+ * access until the date). Mirrors the storefront/portal "Cancelling" logic. */
+export function isCancellationScheduled(sub: Subscription): boolean {
+  return sub.cancelledDate != null && (sub.state ?? '').toUpperCase() === 'ACTIVE';
+}
+
+/** Currently paused (Kill Bill BLOCKED). A *scheduled* future pause instead
+ * lives in `sub.events` as a future PAUSE_* event. */
+export function isPaused(sub: Subscription): boolean {
+  return (sub.state ?? '').toUpperCase() === 'BLOCKED';
+}
+
+/** True when the plan is family/group-enabled. */
+export function isFamilyPlan(plan: Plan): boolean {
+  return Boolean(plan.familyConfig?.enabled);
+}
+
+/** True when the plan charges the first period pro-rata. */
+export function isProRata(plan: Plan): boolean {
+  return (plan.billingMode ?? '').toLowerCase() === 'pro_rata';
+}
+
+/** The zero-total, zero-item invoice Kill Bill commits on subscription setup
+ * (findings #1) — handy to filter out of a customer-facing list. */
+export function isEmptyInvoice(inv: Invoice): boolean {
+  return (inv.amount ?? 0) === 0 && inv.items.length === 0;
 }
