@@ -138,3 +138,52 @@ export interface UsageMetrics {
   currency?: string;
   raw: Json;
 }
+
+/** A member row in the caller's family view (`GET /me/family`). */
+export interface FamilyMember {
+  memberId: string;
+  memberEmail?: string;
+  isOwner: boolean;
+  joinedDate?: string;
+  /** True for the row representing the calling user (UI highlight). */
+  isSelf: boolean;
+  raw: Json;
+}
+
+/** The caller's family (owner or member view) from `GET /me/family`. */
+export interface Family {
+  familySubscriptionId: string;
+  planName?: string;
+  isOwner: boolean;
+  ownerName?: string;
+  ownerEmail?: string;
+  totalSeats: number;
+  activeMembers: number;
+  extraSeatsPurchased: number;
+  members: FamilyMember[];
+  raw: Json;
+}
+
+/** A family invite code (`POST`/`GET /me/family/invite(s)`). */
+export interface InviteCode {
+  code: string;
+  familySubscriptionId?: string;
+  createdBy?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  maxUses?: number;
+  currentUses: number;
+  status: string;
+  raw: Json;
+}
+
+/** Public preview of an invite code (`GET /invite/{code}/validate`). */
+export interface InvitePreview {
+  familySubscriptionId?: string;
+  planName?: string;
+  ownerName?: string;
+  ownerEmail?: string;
+  seatsAvailable?: number;
+  expiresAt?: string;
+  raw: Json;
+}

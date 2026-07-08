@@ -1,8 +1,12 @@
 import { UbilltuApiError, UbilltuAuthError } from './errors.js';
 import type {
   AccountBalance,
+  Family,
+  FamilyMember,
   Invoice,
   InvoiceItem,
+  InviteCode,
+  InvitePreview,
   Json,
   Page,
   Payment,
@@ -260,6 +264,67 @@ export class UbilltuClient {
     );
     if (!res.ok) await this._throw(res);
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  // ---------------------------------------------------------------- Family --
+
+  /** The caller's family view (owner or member), or `null` if not in a family. */
+  async getFamily(): Promise<Family | null> {
+    const fam = (await this._get('/api/v1/me/family'))['family'];
+    return fam && typeof fam === 'object' ? toFamily(fam) : null;
+  }
+
+  /** Owner removes a member from their family. */
+  removeFamilyMember(memberId: string): Promise<Json> {
+    return this._post(
+      `/api/v1/me/family/members/${encodeURIComponent(memberId)}/remove`,
+      {},
+    );
+  }
+
+  /** Leave the family the caller currently belongs to (members only). */
+  leaveFamily(): Promise<Json> {
+    return this._post('/api/v1/me/family-memberships/leave', {});
+  }
+
+  /** Owner generates a fresh invite code (invalidates any existing one). */
+  async createFamilyInvite(expiresInHours = 72): Promise<InviteCode> {
+    const r = await this._post('/api/v1/me/family/invite', {
+      expires_in_hours: expiresInHours,
+    });
+    return toInviteCode(r['data'] ?? {});
+  }
+
+  /** List invite codes for the caller's owned family. */
+  async listFamilyInvites(): Promise<InviteCode[]> {
+    const r = await this._get('/api/v1/me/family/invites');
+    const data: Json[] = Array.isArray(r['data']) ? r['data'] : [];
+    return data.map(toInviteCode);
+  }
+
+  /** Owner revokes an invite code. */
+  revokeFamilyInvite(code: string): Promise<Json> {
+    return this._post(
+      `/api/v1/me/family/invite/${encodeURIComponent(code)}/revoke`,
+      {},
+    );
+  }
+
+  /** Redeem an invite code to join a family (identity comes from the session). */
+  acceptFamilyInvite(code: string): Promise<Json> {
+    return this._post(
+      `/api/v1/me/family/invite/${encodeURIComponent(code)}/accept`,
+      {},
+    );
+  }
+
+  /** Public preview of an invite code (no auth) — for a join page pre-login. */
+  async validateInvite(code: string): Promise<InvitePreview> {
+    const r = await this._request(
+      'GET',
+      `/api/v1/invite/${encodeURIComponent(code)}/validate`,
+    );
+    return toInvitePreview(r['preview'] ?? {});
   }
 
   // -------------------------------------------------------------- Payments --
@@ -548,6 +613,70 @@ function toUsageMetrics(r: Json): UsageMetrics {
     currency: r['currency'] ?? undefined,
     raw: r,
   };
+}
+
+function toFamilyMember(r: Json): FamilyMember {
+  return {
+    memberId: String(r['member_id'] ?? r['id'] ?? ''),
+    memberEmail: r['member_email'] ?? undefined,
+    isOwner: Boolean(r['is_owner']),
+    joinedDate: r['joined_date'] ?? r['joinedDate'] ?? undefined,
+    isSelf: Boolean(r['is_self']),
+    raw: r,
+  };
+}
+
+function toFamily(r: Json): Family {
+  const members: Json[] = Array.isArray(r['members']) ? r['members'] : [];
+  return {
+    familySubscriptionId: String(
+      r['family_subscription_id'] ?? r['familySubscriptionId'] ?? '',
+    ),
+    planName: r['plan_name'] ?? r['planName'] ?? undefined,
+    isOwner: Boolean(r['is_owner']),
+    ownerName: r['owner_name'] ?? r['ownerName'] ?? undefined,
+    ownerEmail: r['owner_email'] ?? r['ownerEmail'] ?? undefined,
+    totalSeats: Number(r['total_seats'] ?? r['totalSeats'] ?? 0),
+    activeMembers: Number(r['active_members'] ?? r['activeMembers'] ?? 0),
+    extraSeatsPurchased: Number(
+      r['extra_seats_purchased'] ?? r['extraSeatsPurchased'] ?? 0,
+    ),
+    members: members.map(toFamilyMember),
+    raw: r,
+  };
+}
+
+function toInviteCode(r: Json): InviteCode {
+  return {
+    code: String(r['code'] ?? ''),
+    familySubscriptionId:
+      r['family_subscription_id'] ?? r['familySubscriptionId'] ?? undefined,
+    createdBy: r['created_by'] ?? r['createdBy'] ?? undefined,
+    createdAt: r['created_at'] ?? r['createdAt'] ?? undefined,
+    expiresAt: r['expires_at'] ?? r['expiresAt'] ?? undefined,
+    maxUses: r['max_uses'] ?? r['maxUses'] ?? undefined,
+    currentUses: Number(r['current_uses'] ?? r['currentUses'] ?? 0),
+    status: String(r['status'] ?? 'ACTIVE'),
+    raw: r,
+  };
+}
+
+function toInvitePreview(r: Json): InvitePreview {
+  return {
+    familySubscriptionId:
+      r['family_subscription_id'] ?? r['familySubscriptionId'] ?? undefined,
+    planName: r['plan_name'] ?? r['planName'] ?? undefined,
+    ownerName: r['owner_name'] ?? r['ownerName'] ?? undefined,
+    ownerEmail: r['owner_email'] ?? r['ownerEmail'] ?? undefined,
+    seatsAvailable: r['seats_available'] ?? r['seatsAvailable'] ?? undefined,
+    expiresAt: r['expires_at'] ?? r['expiresAt'] ?? undefined,
+    raw: r,
+  };
+}
+
+/** Seats not yet filled on a family (`totalSeats - activeMembers`, min 0). */
+export function familySeatsAvailable(family: Family): number {
+  return Math.max(0, family.totalSeats - family.activeMembers);
 }
 
 // ── Lifecycle helpers (parity with the Python SDK's model properties) ────────

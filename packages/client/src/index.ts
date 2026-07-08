@@ -6,6 +6,7 @@ export {
   isFamilyPlan,
   isProRata,
   isEmptyInvoice,
+  familySeatsAvailable,
 } from './client.js';
 export {
   UbilltuError,
@@ -25,4 +26,8 @@ export type {
   FamilyConfig,
   AccountBalance,
   UsageMetrics,
+  Family,
+  FamilyMember,
+  InviteCode,
+  InvitePreview,
 } from './types.js';
