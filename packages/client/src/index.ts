@@ -23,6 +23,7 @@ export type {
   InvoiceItem,
   Invoice,
   Payment,
+  PauseResult,
   PaymentMethod,
   FamilyConfig,
   AccountBalance,

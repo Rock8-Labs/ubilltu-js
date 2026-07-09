@@ -9,6 +9,7 @@ import type {
   InvitePreview,
   Json,
   Page,
+  PauseResult,
   Payment,
   PaymentMethod,
   Plan,
@@ -16,6 +17,9 @@ import type {
   Tokens,
   UsageMetrics,
 } from './types.js';
+
+/** How a request treats auth: require a token, attach it if present, or none. */
+type AuthMode = 'required' | 'optional' | 'none';
 
 export interface UbilltuClientOptions {
   /** The tenant storefront slug, sent as the `X-Storefront-Slug` header. */
@@ -78,7 +82,7 @@ export class UbilltuClient {
     const data = await this._post(
       '/api/v1/auth/login',
       { email, password },
-      false,
+      'none',
     );
     return (this._tokens = toTokens(data));
   }
@@ -98,7 +102,7 @@ export class UbilltuClient {
     const data = await this._post(
       '/api/v1/auth/register',
       { ...rest, tos_accepted: tosAccepted },
-      false,
+      'none',
     );
     const tokens = toTokens(data);
     if (tokens.accessToken) this._tokens = tokens;
@@ -112,7 +116,7 @@ export class UbilltuClient {
     const data = await this._post(
       '/api/v1/auth/refresh',
       { refresh_token: rt },
-      false,
+      'none',
     );
     return (this._tokens = toTokens(data));
   }
@@ -169,14 +173,14 @@ export class UbilltuClient {
 
   // ----------------------------------------------------------------- Plans --
 
-  /** List available plans from the tenant catalog. */
+  /** List available plans. PUBLIC — works before `login()` (token attached only if present). */
   async listPlans(opts?: { page?: number; perPage?: number }): Promise<Page<Plan>> {
-    return toPage(await this._get('/api/v1/plans' + pageQuery(opts)), toPlan);
+    return toPage(await this._get('/api/v1/plans' + pageQuery(opts), 'optional'), toPlan);
   }
 
-  /** Fetch a single plan by id. */
+  /** Fetch a single plan by id. PUBLIC — works before `login()`. */
   async getPlan(planId: string): Promise<Plan> {
-    return toPlan(await this._get(`/api/v1/plans/${encodeURIComponent(planId)}`));
+    return toPlan(await this._get(`/api/v1/plans/${encodeURIComponent(planId)}`, 'optional'));
   }
 
   // --------------------------------------------------------- Subscriptions --
@@ -228,21 +232,29 @@ export class UbilltuClient {
     return this._get(`/api/v1/subscriptions/${encodeURIComponent(id)}/dry-run${q}`);
   }
 
-  /** Cancel a subscription. */
-  cancelSubscription(id: string): Promise<Json> {
-    return this._delete(`/api/v1/subscriptions/${encodeURIComponent(id)}`);
+  /**
+   * Cancel a subscription. `policy` defaults to `END_OF_TERM` — the subscription
+   * keeps access until the period ends and reads as "Cancelling" (reactivatable).
+   * Pass `IMMEDIATE` to cancel now, or `null` to use the server default.
+   */
+  cancelSubscription(id: string, policy: string | null = 'END_OF_TERM'): Promise<Json> {
+    return this._request(
+      'DELETE',
+      `/api/v1/subscriptions/${encodeURIComponent(id)}`,
+      policy ? { use_policy: policy } : undefined,
+    );
   }
 
-  /** Pause a subscription. */
-  async pauseSubscription(id: string): Promise<Subscription> {
-    return toSubscription(
+  /** Pause a subscription (schedules pause at end of period). */
+  async pauseSubscription(id: string): Promise<PauseResult> {
+    return toPauseResult(
       await this._post(`/api/v1/subscriptions/${encodeURIComponent(id)}/pause`, {}),
     );
   }
 
   /** Resume a paused subscription. */
-  async resumeSubscription(id: string): Promise<Subscription> {
-    return toSubscription(
+  async resumeSubscription(id: string): Promise<PauseResult> {
+    return toPauseResult(
       await this._post(`/api/v1/subscriptions/${encodeURIComponent(id)}/resume`, {}),
     );
   }
@@ -354,6 +366,8 @@ export class UbilltuClient {
     const r = await this._request(
       'GET',
       `/api/v1/invite/${encodeURIComponent(code)}/validate`,
+      undefined,
+      'none',
     );
     return toInvitePreview(r['preview'] ?? {});
   }
@@ -451,51 +465,57 @@ export class UbilltuClient {
 
   // ------------------------------------------------------------- internals --
 
-  private _headers(json = false): Record<string, string> {
+  private _headers(json = false, auth: AuthMode = 'required'): Record<string, string> {
     const h: Record<string, string> = {
       'X-Storefront-Slug': this.storefrontSlug,
       Accept: 'application/json',
     };
     if (json) h['Content-Type'] = 'application/json';
     const t = this._tokens?.accessToken;
-    if (t) h['Authorization'] = `Bearer ${t}`;
+    if (auth === 'required' && !t) throw new UbilltuAuthError();
+    if (auth !== 'none' && t) h['Authorization'] = `Bearer ${t}`;
     return h;
   }
 
-  private _requireAuth(): void {
-    if (!this.isAuthenticated) throw new UbilltuAuthError();
+  private async _get(path: string, auth: AuthMode = 'required'): Promise<Json> {
+    return this._request('GET', path, undefined, auth);
   }
 
-  private async _get(path: string): Promise<Json> {
-    this._requireAuth();
-    return this._request('GET', path);
-  }
-
-  private async _post(path: string, body: Json, auth = true): Promise<Json> {
-    if (auth) this._requireAuth();
-    return this._request('POST', path, body);
+  private async _post(path: string, body: Json, auth: AuthMode = 'required'): Promise<Json> {
+    return this._request('POST', path, body, auth);
   }
 
   private async _put(path: string, body: Json): Promise<Json> {
-    this._requireAuth();
-    return this._request('PUT', path, body);
+    return this._request('PUT', path, body, 'required');
   }
 
   private async _delete(path: string): Promise<Json> {
-    this._requireAuth();
-    return this._request('DELETE', path);
+    return this._request('DELETE', path, undefined, 'required');
   }
 
   private async _request(
     method: string,
     path: string,
     body?: Json,
+    auth: AuthMode = 'required',
+    retry = true,
   ): Promise<Json> {
     const res = await this._fetch(`${this.baseUrl}${path}`, {
       method,
-      headers: this._headers(body !== undefined),
+      headers: this._headers(body !== undefined, auth),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
+    // Transparent refresh-once on 401 (docs recommend refresh-on-401).
+    if (res.status === 401 && retry && auth !== 'none' && this._tokens?.refreshToken) {
+      let refreshed = false;
+      try {
+        await this.refresh();
+        refreshed = true;
+      } catch {
+        // fall through to throw the original 401
+      }
+      if (refreshed) return this._request(method, path, body, auth, false);
+    }
     if (!res.ok) await this._throw(res);
     const text = await res.text();
     if (!text) return {};
@@ -608,6 +628,15 @@ function toSubscription(r: Json): Subscription {
       : Array.isArray(s['events'])
         ? s['events']
         : [],
+    raw: r,
+  };
+}
+
+function toPauseResult(r: Json): PauseResult {
+  return {
+    success: Boolean(r['success']),
+    message: r['message'] ?? undefined,
+    pausedUntil: r['paused_until'] ?? r['pausedUntil'] ?? undefined,
     raw: r,
   };
 }

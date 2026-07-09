@@ -107,6 +107,15 @@ export interface Payment {
   raw: Json;
 }
 
+/** Result of a pause/resume (`{success, message, paused_until}`). */
+export interface PauseResult {
+  success: boolean;
+  message?: string;
+  /** When the pause takes effect (end of the current period), if scheduled. */
+  pausedUntil?: string;
+  raw: Json;
+}
+
 /** A saved payment method (card on file). */
 export interface PaymentMethod {
   id: string;
