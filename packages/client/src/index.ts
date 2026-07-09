@@ -7,6 +7,7 @@ export {
   isProRata,
   isEmptyInvoice,
   familySeatsAvailable,
+  resolveSubscriptionPrice,
 } from './client.js';
 export {
   UbilltuError,

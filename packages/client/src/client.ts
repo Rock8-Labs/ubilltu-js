@@ -150,8 +150,8 @@ export class UbilltuClient {
   }
 
   /** The subscriber's payment history. */
-  async listPayments(): Promise<Page<Payment>> {
-    return toPage(await this._get('/api/v1/account/payments'), toPayment);
+  async listPayments(opts?: { page?: number; perPage?: number }): Promise<Page<Payment>> {
+    return toPage(await this._get('/api/v1/account/payments' + pageQuery(opts)), toPayment);
   }
 
   /**
@@ -170,8 +170,8 @@ export class UbilltuClient {
   // ----------------------------------------------------------------- Plans --
 
   /** List available plans from the tenant catalog. */
-  async listPlans(): Promise<Page<Plan>> {
-    return toPage(await this._get('/api/v1/plans'), toPlan);
+  async listPlans(opts?: { page?: number; perPage?: number }): Promise<Page<Plan>> {
+    return toPage(await this._get('/api/v1/plans' + pageQuery(opts)), toPlan);
   }
 
   /** Fetch a single plan by id. */
@@ -182,8 +182,8 @@ export class UbilltuClient {
   // --------------------------------------------------------- Subscriptions --
 
   /** List the subscriber's subscriptions. */
-  async listSubscriptions(): Promise<Page<Subscription>> {
-    return toPage(await this._get('/api/v1/subscriptions'), toSubscription);
+  async listSubscriptions(opts?: { page?: number; perPage?: number }): Promise<Page<Subscription>> {
+    return toPage(await this._get('/api/v1/subscriptions' + pageQuery(opts)), toSubscription);
   }
 
   /** Fetch a single subscription. */
@@ -268,8 +268,8 @@ export class UbilltuClient {
   // -------------------------------------------------------------- Invoices --
 
   /** List the subscriber's invoices. */
-  async listInvoices(): Promise<Page<Invoice>> {
-    return toPage(await this._get('/api/v1/invoices'), toInvoice);
+  async listInvoices(opts?: { page?: number; perPage?: number }): Promise<Page<Invoice>> {
+    return toPage(await this._get('/api/v1/invoices' + pageQuery(opts)), toInvoice);
   }
 
   /** Fetch a single invoice with line-item detail. */
@@ -361,8 +361,8 @@ export class UbilltuClient {
   // -------------------------------------------------------------- Payments --
 
   /** List the subscriber's saved payment methods (cards on file). */
-  async listPaymentMethods(): Promise<Page<PaymentMethod>> {
-    return toPage(await this._get('/api/v1/payments/methods'), toPaymentMethod);
+  async listPaymentMethods(opts?: { page?: number; perPage?: number }): Promise<Page<PaymentMethod>> {
+    return toPage(await this._get('/api/v1/payments/methods' + pageQuery(opts)), toPaymentMethod);
   }
 
   /** Save a payment method from a PSP card token. */
@@ -754,6 +754,35 @@ function toInvitePreview(r: Json): InvitePreview {
 /** Seats not yet filled on a family (`totalSeats - activeMembers`, min 0). */
 export function familySeatsAvailable(family: Family): number {
   return Math.max(0, family.totalSeats - family.activeMembers);
+}
+
+/** Build a `?page=&per_page=` query string (empty when nothing is set). */
+function pageQuery(opts?: { page?: number; perPage?: number }): string {
+  if (!opts) return '';
+  const p = new URLSearchParams();
+  if (opts.page != null) p.set('page', String(opts.page));
+  if (opts.perPage != null) p.set('per_page', String(opts.perPage));
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+/**
+ * Best-effort subscription price. A subscription's `price` can come back null
+ * from the API (findings #5); when it does, derive it from the matching plan
+ * in `plans` (matched on the plan slug/name).
+ */
+export function resolveSubscriptionPrice(
+  sub: Subscription,
+  plans: Plan[],
+): number | undefined {
+  if (sub.price != null) return sub.price;
+  const name = sub.planName;
+  if (name) {
+    for (const p of plans) {
+      if (p.id === name || p.name === name) return p.price;
+    }
+  }
+  return undefined;
 }
 
 // ── Lifecycle helpers (parity with the Python SDK's model properties) ────────
