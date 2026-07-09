@@ -1,6 +1,15 @@
 export { UbilltuClient } from './client.js';
 export type { UbilltuClientOptions } from './client.js';
 export {
+  isCancellationScheduled,
+  isPaused,
+  isFamilyPlan,
+  isProRata,
+  isEmptyInvoice,
+  familySeatsAvailable,
+  resolveSubscriptionPrice,
+} from './client.js';
+export {
   UbilltuError,
   UbilltuApiError,
   UbilltuAuthError,
@@ -11,7 +20,16 @@ export type {
   Tokens,
   Plan,
   Subscription,
+  InvoiceItem,
   Invoice,
   Payment,
+  PauseResult,
   PaymentMethod,
+  FamilyConfig,
+  AccountBalance,
+  UsageMetrics,
+  Family,
+  FamilyMember,
+  InviteCode,
+  InvitePreview,
 } from './types.js';

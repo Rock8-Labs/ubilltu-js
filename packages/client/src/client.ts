@@ -1,14 +1,25 @@
 import { UbilltuApiError, UbilltuAuthError } from './errors.js';
 import type {
+  AccountBalance,
+  Family,
+  FamilyMember,
   Invoice,
+  InvoiceItem,
+  InviteCode,
+  InvitePreview,
   Json,
   Page,
+  PauseResult,
   Payment,
   PaymentMethod,
   Plan,
   Subscription,
   Tokens,
+  UsageMetrics,
 } from './types.js';
+
+/** How a request treats auth: require a token, attach it if present, or none. */
+type AuthMode = 'required' | 'optional' | 'none';
 
 export interface UbilltuClientOptions {
   /** The tenant storefront slug, sent as the `X-Storefront-Slug` header. */
@@ -71,7 +82,7 @@ export class UbilltuClient {
     const data = await this._post(
       '/api/v1/auth/login',
       { email, password },
-      false,
+      'none',
     );
     return (this._tokens = toTokens(data));
   }
@@ -91,7 +102,7 @@ export class UbilltuClient {
     const data = await this._post(
       '/api/v1/auth/register',
       { ...rest, tos_accepted: tosAccepted },
-      false,
+      'none',
     );
     const tokens = toTokens(data);
     if (tokens.accessToken) this._tokens = tokens;
@@ -105,7 +116,7 @@ export class UbilltuClient {
     const data = await this._post(
       '/api/v1/auth/refresh',
       { refresh_token: rt },
-      false,
+      'none',
     );
     return (this._tokens = toTokens(data));
   }
@@ -132,38 +143,51 @@ export class UbilltuClient {
     return this._put('/api/v1/account', fields);
   }
 
-  /** The subscriber's account balance. */
-  balance(): Promise<Json> {
-    return this._get('/api/v1/account/balance');
+  /** The subscriber's outstanding balance + available credit. */
+  async balance(): Promise<AccountBalance> {
+    return toAccountBalance(await this._get('/api/v1/account/balance'));
   }
 
   /** The subscriber's usage metrics. */
-  usage(): Promise<Json> {
-    return this._get('/api/v1/account/usage');
+  async usage(): Promise<UsageMetrics> {
+    return toUsageMetrics(await this._get('/api/v1/account/usage'));
   }
 
   /** The subscriber's payment history. */
-  async listPayments(): Promise<Page<Payment>> {
-    return toPage(await this._get('/api/v1/account/payments'), toPayment);
+  async listPayments(opts?: { page?: number; perPage?: number }): Promise<Page<Payment>> {
+    return toPage(await this._get('/api/v1/account/payments' + pageQuery(opts)), toPayment);
+  }
+
+  /**
+   * Right-to-erasure (GDPR Art. 17 / POPIA s24). Cancels subscriptions, scrubs
+   * PII, and pseudonymizes the account — IRREVERSIBLE. `confirmEmail` must match
+   * the account email; `confirmPhrase` must be exactly `"ERASE"`. Returns
+   * `{ erasure_id, erased_fields }`.
+   */
+  eraseAccount(confirmEmail: string, confirmPhrase = 'ERASE'): Promise<Json> {
+    return this._post('/api/v1/account/erase', {
+      confirm_email: confirmEmail,
+      confirm_phrase: confirmPhrase,
+    });
   }
 
   // ----------------------------------------------------------------- Plans --
 
-  /** List available plans from the tenant catalog. */
-  async listPlans(): Promise<Page<Plan>> {
-    return toPage(await this._get('/api/v1/plans'), toPlan);
+  /** List available plans. PUBLIC — works before `login()` (token attached only if present). */
+  async listPlans(opts?: { page?: number; perPage?: number }): Promise<Page<Plan>> {
+    return toPage(await this._get('/api/v1/plans' + pageQuery(opts), 'optional'), toPlan);
   }
 
-  /** Fetch a single plan by id. */
+  /** Fetch a single plan by id. PUBLIC — works before `login()`. */
   async getPlan(planId: string): Promise<Plan> {
-    return toPlan(await this._get(`/api/v1/plans/${encodeURIComponent(planId)}`));
+    return toPlan(await this._get(`/api/v1/plans/${encodeURIComponent(planId)}`, 'optional'));
   }
 
   // --------------------------------------------------------- Subscriptions --
 
   /** List the subscriber's subscriptions. */
-  async listSubscriptions(): Promise<Page<Subscription>> {
-    return toPage(await this._get('/api/v1/subscriptions'), toSubscription);
+  async listSubscriptions(opts?: { page?: number; perPage?: number }): Promise<Page<Subscription>> {
+    return toPage(await this._get('/api/v1/subscriptions' + pageQuery(opts)), toSubscription);
   }
 
   /** Fetch a single subscription. */
@@ -208,26 +232,42 @@ export class UbilltuClient {
     return this._get(`/api/v1/subscriptions/${encodeURIComponent(id)}/dry-run${q}`);
   }
 
-  /** Cancel a subscription. */
-  cancelSubscription(id: string): Promise<Json> {
-    return this._delete(`/api/v1/subscriptions/${encodeURIComponent(id)}`);
+  /**
+   * Cancel a subscription. `policy` defaults to `END_OF_TERM` — the subscription
+   * keeps access until the period ends and reads as "Cancelling" (reactivatable).
+   * Pass `IMMEDIATE` to cancel now, or `null` to use the server default.
+   */
+  cancelSubscription(id: string, policy: string | null = 'END_OF_TERM'): Promise<Json> {
+    return this._request(
+      'DELETE',
+      `/api/v1/subscriptions/${encodeURIComponent(id)}`,
+      policy ? { use_policy: policy } : undefined,
+    );
   }
 
-  /** Pause a subscription. */
-  async pauseSubscription(id: string): Promise<Subscription> {
-    return toSubscription(
+  /** Pause a subscription (schedules pause at end of period). */
+  async pauseSubscription(id: string): Promise<PauseResult> {
+    return toPauseResult(
       await this._post(`/api/v1/subscriptions/${encodeURIComponent(id)}/pause`, {}),
     );
   }
 
   /** Resume a paused subscription. */
-  async resumeSubscription(id: string): Promise<Subscription> {
-    return toSubscription(
+  async resumeSubscription(id: string): Promise<PauseResult> {
+    return toPauseResult(
       await this._post(`/api/v1/subscriptions/${encodeURIComponent(id)}/resume`, {}),
     );
   }
 
   /** Reactivate a cancelled subscription. */
+  /** Whether the customer may self-resume this (paused) subscription (SEC-019). */
+  async selfResumeAllowed(id: string): Promise<boolean> {
+    const r = await this._get(
+      `/api/v1/subscriptions/${encodeURIComponent(id)}/self-resume-allowed`,
+    );
+    return Boolean(r['allowed']);
+  }
+
   async reactivateSubscription(id: string): Promise<Subscription> {
     return toSubscription(
       await this._post(
@@ -240,8 +280,8 @@ export class UbilltuClient {
   // -------------------------------------------------------------- Invoices --
 
   /** List the subscriber's invoices. */
-  async listInvoices(): Promise<Page<Invoice>> {
-    return toPage(await this._get('/api/v1/invoices'), toInvoice);
+  async listInvoices(opts?: { page?: number; perPage?: number }): Promise<Page<Invoice>> {
+    return toPage(await this._get('/api/v1/invoices' + pageQuery(opts)), toInvoice);
   }
 
   /** Fetch a single invoice with line-item detail. */
@@ -259,11 +299,130 @@ export class UbilltuClient {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  /** Render an invoice as branded HTML (string). */
+  async invoiceHtml(invoiceId: string): Promise<string> {
+    const res = await this._fetch(
+      `${this.baseUrl}/api/v1/invoices/${encodeURIComponent(invoiceId)}/html`,
+      { headers: this._headers() },
+    );
+    if (!res.ok) await this._throw(res);
+    return res.text();
+  }
+
+  // ---------------------------------------------------------------- Family --
+
+  /** The caller's family view (owner or member), or `null` if not in a family. */
+  async getFamily(): Promise<Family | null> {
+    const fam = (await this._get('/api/v1/me/family'))['family'];
+    return fam && typeof fam === 'object' ? toFamily(fam) : null;
+  }
+
+  /** Owner removes a member from their family. */
+  removeFamilyMember(memberId: string): Promise<Json> {
+    return this._post(
+      `/api/v1/me/family/members/${encodeURIComponent(memberId)}/remove`,
+      {},
+    );
+  }
+
+  /** Leave the family the caller currently belongs to (members only). */
+  leaveFamily(): Promise<Json> {
+    return this._post('/api/v1/me/family-memberships/leave', {});
+  }
+
+  /** Owner generates a fresh invite code (invalidates any existing one). */
+  async createFamilyInvite(expiresInHours = 72): Promise<InviteCode> {
+    const r = await this._post('/api/v1/me/family/invite', {
+      expires_in_hours: expiresInHours,
+    });
+    return toInviteCode(r['data'] ?? {});
+  }
+
+  /** List invite codes for the caller's owned family. */
+  async listFamilyInvites(): Promise<InviteCode[]> {
+    const r = await this._get('/api/v1/me/family/invites');
+    const data: Json[] = Array.isArray(r['data']) ? r['data'] : [];
+    return data.map(toInviteCode);
+  }
+
+  /** Owner revokes an invite code. */
+  revokeFamilyInvite(code: string): Promise<Json> {
+    return this._post(
+      `/api/v1/me/family/invite/${encodeURIComponent(code)}/revoke`,
+      {},
+    );
+  }
+
+  /** Redeem an invite code to join a family (identity comes from the session). */
+  acceptFamilyInvite(code: string): Promise<Json> {
+    return this._post(
+      `/api/v1/me/family/invite/${encodeURIComponent(code)}/accept`,
+      {},
+    );
+  }
+
+  /** Public preview of an invite code (no auth) — for a join page pre-login. */
+  async validateInvite(code: string): Promise<InvitePreview> {
+    const r = await this._request(
+      'GET',
+      `/api/v1/invite/${encodeURIComponent(code)}/validate`,
+      undefined,
+      'none',
+    );
+    return toInvitePreview(r['preview'] ?? {});
+  }
+
   // -------------------------------------------------------------- Payments --
 
   /** List the subscriber's saved payment methods (cards on file). */
-  async listPaymentMethods(): Promise<Page<PaymentMethod>> {
-    return toPage(await this._get('/api/v1/payments/methods'), toPaymentMethod);
+  async listPaymentMethods(opts?: { page?: number; perPage?: number }): Promise<Page<PaymentMethod>> {
+    return toPage(await this._get('/api/v1/payments/methods' + pageQuery(opts)), toPaymentMethod);
+  }
+
+  /** Save a payment method from a PSP card token. */
+  async addPaymentMethod(cardToken: string, isDefault = false): Promise<PaymentMethod> {
+    return toPaymentMethod(
+      await this._post('/api/v1/payments/methods', {
+        card_token: cardToken,
+        is_default: isDefault,
+      }),
+    );
+  }
+
+  /** Remove a saved payment method (re-promotes another card if it was default). */
+  deletePaymentMethod(methodId: string): Promise<Json> {
+    return this._delete(`/api/v1/payments/methods/${encodeURIComponent(methodId)}`);
+  }
+
+  /** Make a saved payment method the account default. */
+  setDefaultPaymentMethod(methodId: string): Promise<Json> {
+    return this._put(
+      `/api/v1/payments/methods/${encodeURIComponent(methodId)}/default`,
+      {},
+    );
+  }
+
+  /** Ensure the account default points at a real, chargeable card. */
+  reconcileDefaultPaymentMethod(): Promise<Json> {
+    return this._post('/api/v1/payments/methods/reconcile-default', {});
+  }
+
+  /** Fetch a single payment's live status (reconciles PENDING with the gateway). */
+  async getPayment(paymentId: string): Promise<Payment> {
+    return toPayment(
+      await this._get(`/api/v1/payments/${encodeURIComponent(paymentId)}`),
+    );
+  }
+
+  /**
+   * Make an ad-hoc / one-off payment. `source` describes what to pay
+   * (`{ type: 'ad_hoc', amount, currency, description }`, or `{ type: 'invoice',
+   * invoice_id }` / `{ type: 'addon', plan_id }`); `settlement` describes how
+   * (`{ mode: 'saved', payment_method_id }` or `{ mode: 'hosted', return_url }`).
+   * Returns the raw response (`status`, `requires_redirect`, `redirect_url`, `payment_id`).
+   */
+  createOneOffPayment(source: Json, settlement: Json): Promise<Json> {
+    return this._post('/api/v1/payments/one-off', { source, settlement });
   }
 
   /**
@@ -306,51 +465,57 @@ export class UbilltuClient {
 
   // ------------------------------------------------------------- internals --
 
-  private _headers(json = false): Record<string, string> {
+  private _headers(json = false, auth: AuthMode = 'required'): Record<string, string> {
     const h: Record<string, string> = {
       'X-Storefront-Slug': this.storefrontSlug,
       Accept: 'application/json',
     };
     if (json) h['Content-Type'] = 'application/json';
     const t = this._tokens?.accessToken;
-    if (t) h['Authorization'] = `Bearer ${t}`;
+    if (auth === 'required' && !t) throw new UbilltuAuthError();
+    if (auth !== 'none' && t) h['Authorization'] = `Bearer ${t}`;
     return h;
   }
 
-  private _requireAuth(): void {
-    if (!this.isAuthenticated) throw new UbilltuAuthError();
+  private async _get(path: string, auth: AuthMode = 'required'): Promise<Json> {
+    return this._request('GET', path, undefined, auth);
   }
 
-  private async _get(path: string): Promise<Json> {
-    this._requireAuth();
-    return this._request('GET', path);
-  }
-
-  private async _post(path: string, body: Json, auth = true): Promise<Json> {
-    if (auth) this._requireAuth();
-    return this._request('POST', path, body);
+  private async _post(path: string, body: Json, auth: AuthMode = 'required'): Promise<Json> {
+    return this._request('POST', path, body, auth);
   }
 
   private async _put(path: string, body: Json): Promise<Json> {
-    this._requireAuth();
-    return this._request('PUT', path, body);
+    return this._request('PUT', path, body, 'required');
   }
 
   private async _delete(path: string): Promise<Json> {
-    this._requireAuth();
-    return this._request('DELETE', path);
+    return this._request('DELETE', path, undefined, 'required');
   }
 
   private async _request(
     method: string,
     path: string,
     body?: Json,
+    auth: AuthMode = 'required',
+    retry = true,
   ): Promise<Json> {
     const res = await this._fetch(`${this.baseUrl}${path}`, {
       method,
-      headers: this._headers(body !== undefined),
+      headers: this._headers(body !== undefined, auth),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
+    // Transparent refresh-once on 401 (docs recommend refresh-on-401).
+    if (res.status === 401 && retry && auth !== 'none' && this._tokens?.refreshToken) {
+      let refreshed = false;
+      try {
+        await this.refresh();
+        refreshed = true;
+      } catch {
+        // fall through to throw the original 401
+      }
+      if (refreshed) return this._request(method, path, body, auth, false);
+    }
     if (!res.ok) await this._throw(res);
     const text = await res.text();
     if (!text) return {};
@@ -426,7 +591,11 @@ function toPlan(r: Json): Plan {
       r['billing_period'] ?? r['billingPeriod'] ?? first['billing_period'] ?? undefined,
     trialDays: trial
       ? (trial['duration_length'] ?? trial['durationLength'] ?? undefined)
-      : undefined,
+      : (r['trial_days'] ?? r['trialDays'] ?? undefined),
+    features: Array.isArray(r['features']) ? r['features'] : [],
+    billingMode: r['billing_mode'] ?? r['billingMode'] ?? undefined,
+    billingDay: r['billing_day'] ?? r['billingDay'] ?? undefined,
+    familyConfig: r['family_config'] ?? r['familyConfig'] ?? undefined,
     raw: r,
   };
 }
@@ -445,6 +614,29 @@ function toSubscription(r: Json): Subscription {
     state: s['state'] ?? s['status'] ?? undefined,
     price: s['price'] ?? undefined,
     currency: s['currency'] ?? undefined,
+    cancelledDate: s['cancelled_date'] ?? s['cancelledDate'] ?? undefined,
+    chargedThroughDate:
+      s['charged_through_date'] ?? s['chargedThroughDate'] ?? undefined,
+    billingEndDate: s['billing_end_date'] ?? s['billingEndDate'] ?? undefined,
+    mrrMonthly: s['mrr_monthly'] ?? s['mrrMonthly'] ?? undefined,
+    lastPaymentAmount: s['last_payment_amount'] ?? s['lastPaymentAmount'] ?? undefined,
+    lastPaymentDate: s['last_payment_date'] ?? s['lastPaymentDate'] ?? undefined,
+    lastPaymentCurrency:
+      s['last_payment_currency'] ?? s['lastPaymentCurrency'] ?? undefined,
+    events: Array.isArray(r['events'])
+      ? r['events']
+      : Array.isArray(s['events'])
+        ? s['events']
+        : [],
+    raw: r,
+  };
+}
+
+function toPauseResult(r: Json): PauseResult {
+  return {
+    success: Boolean(r['success']),
+    message: r['message'] ?? undefined,
+    pausedUntil: r['paused_until'] ?? r['pausedUntil'] ?? undefined,
     raw: r,
   };
 }
@@ -461,12 +653,32 @@ function toPaymentMethod(r: Json): PaymentMethod {
   };
 }
 
+function toInvoiceItem(r: Json): InvoiceItem {
+  return {
+    description: r['description'] ?? undefined,
+    planName: r['plan_name'] ?? r['planName'] ?? undefined,
+    phase: r['phase'] ?? undefined,
+    amount: r['amount'] ?? undefined,
+    currency: r['currency'] ?? undefined,
+    startDate: r['start_date'] ?? r['startDate'] ?? undefined,
+    endDate: r['end_date'] ?? r['endDate'] ?? undefined,
+    raw: r,
+  };
+}
+
 function toInvoice(r: Json): Invoice {
+  const items: Json[] = Array.isArray(r['items']) ? r['items'] : [];
   return {
     id: String(r['invoice_id'] ?? r['id'] ?? ''),
     amount: r['amount'] ?? r['balance'] ?? undefined,
     currency: r['currency'] ?? undefined,
     status: r['status'] ?? undefined,
+    invoiceNumber: r['invoice_number'] ?? r['invoiceNumber'] ?? undefined,
+    invoiceDate: r['invoice_date'] ?? r['invoiceDate'] ?? undefined,
+    balance: r['balance'] ?? undefined,
+    creditAdj: r['credit_adj'] ?? r['creditAdj'] ?? undefined,
+    refundAdj: r['refund_adj'] ?? r['refundAdj'] ?? undefined,
+    items: items.map(toInvoiceItem),
     raw: r,
   };
 }
@@ -477,6 +689,157 @@ function toPayment(r: Json): Payment {
     amount: r['amount'] ?? r['purchased_amount'] ?? undefined,
     currency: r['currency'] ?? undefined,
     status: r['status'] ?? r['state'] ?? undefined,
+    paymentNumber: r['payment_number'] ?? r['paymentNumber'] ?? undefined,
+    paymentDate: r['payment_date'] ?? r['paymentDate'] ?? undefined,
+    invoiceId: r['invoice_id'] ?? r['invoiceId'] ?? undefined,
+    invoiceNumber: r['invoice_number'] ?? r['invoiceNumber'] ?? undefined,
+    refundedAmount: r['refunded_amount'] ?? r['refundedAmount'] ?? undefined,
+    description: r['description'] ?? undefined,
     raw: r,
   };
+}
+
+function toAccountBalance(r: Json): AccountBalance {
+  return {
+    balance: r['balance'] ?? undefined,
+    credit: r['credit'] ?? undefined,
+    currency: r['currency'] ?? undefined,
+    raw: r,
+  };
+}
+
+function toUsageMetrics(r: Json): UsageMetrics {
+  return {
+    totalSubscriptions: r['total_subscriptions'] ?? r['totalSubscriptions'] ?? undefined,
+    activeSubscriptions:
+      r['active_subscriptions'] ?? r['activeSubscriptions'] ?? undefined,
+    totalInvoices: r['total_invoices'] ?? r['totalInvoices'] ?? undefined,
+    unpaidInvoices: r['unpaid_invoices'] ?? r['unpaidInvoices'] ?? undefined,
+    totalSpent: r['total_spent'] ?? r['totalSpent'] ?? undefined,
+    currency: r['currency'] ?? undefined,
+    raw: r,
+  };
+}
+
+function toFamilyMember(r: Json): FamilyMember {
+  return {
+    memberId: String(r['member_id'] ?? r['id'] ?? ''),
+    memberEmail: r['member_email'] ?? undefined,
+    isOwner: Boolean(r['is_owner']),
+    joinedDate: r['joined_date'] ?? r['joinedDate'] ?? undefined,
+    isSelf: Boolean(r['is_self']),
+    raw: r,
+  };
+}
+
+function toFamily(r: Json): Family {
+  const members: Json[] = Array.isArray(r['members']) ? r['members'] : [];
+  return {
+    familySubscriptionId: String(
+      r['family_subscription_id'] ?? r['familySubscriptionId'] ?? '',
+    ),
+    planName: r['plan_name'] ?? r['planName'] ?? undefined,
+    isOwner: Boolean(r['is_owner']),
+    ownerName: r['owner_name'] ?? r['ownerName'] ?? undefined,
+    ownerEmail: r['owner_email'] ?? r['ownerEmail'] ?? undefined,
+    totalSeats: Number(r['total_seats'] ?? r['totalSeats'] ?? 0),
+    activeMembers: Number(r['active_members'] ?? r['activeMembers'] ?? 0),
+    extraSeatsPurchased: Number(
+      r['extra_seats_purchased'] ?? r['extraSeatsPurchased'] ?? 0,
+    ),
+    members: members.map(toFamilyMember),
+    raw: r,
+  };
+}
+
+function toInviteCode(r: Json): InviteCode {
+  return {
+    code: String(r['code'] ?? ''),
+    familySubscriptionId:
+      r['family_subscription_id'] ?? r['familySubscriptionId'] ?? undefined,
+    createdBy: r['created_by'] ?? r['createdBy'] ?? undefined,
+    createdAt: r['created_at'] ?? r['createdAt'] ?? undefined,
+    expiresAt: r['expires_at'] ?? r['expiresAt'] ?? undefined,
+    maxUses: r['max_uses'] ?? r['maxUses'] ?? undefined,
+    currentUses: Number(r['current_uses'] ?? r['currentUses'] ?? 0),
+    status: String(r['status'] ?? 'ACTIVE'),
+    raw: r,
+  };
+}
+
+function toInvitePreview(r: Json): InvitePreview {
+  return {
+    familySubscriptionId:
+      r['family_subscription_id'] ?? r['familySubscriptionId'] ?? undefined,
+    planName: r['plan_name'] ?? r['planName'] ?? undefined,
+    ownerName: r['owner_name'] ?? r['ownerName'] ?? undefined,
+    ownerEmail: r['owner_email'] ?? r['ownerEmail'] ?? undefined,
+    seatsAvailable: r['seats_available'] ?? r['seatsAvailable'] ?? undefined,
+    expiresAt: r['expires_at'] ?? r['expiresAt'] ?? undefined,
+    raw: r,
+  };
+}
+
+/** Seats not yet filled on a family (`totalSeats - activeMembers`, min 0). */
+export function familySeatsAvailable(family: Family): number {
+  return Math.max(0, family.totalSeats - family.activeMembers);
+}
+
+/** Build a `?page=&per_page=` query string (empty when nothing is set). */
+function pageQuery(opts?: { page?: number; perPage?: number }): string {
+  if (!opts) return '';
+  const p = new URLSearchParams();
+  if (opts.page != null) p.set('page', String(opts.page));
+  if (opts.perPage != null) p.set('per_page', String(opts.perPage));
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+/**
+ * Best-effort subscription price. A subscription's `price` can come back null
+ * from the API (findings #5); when it does, derive it from the matching plan
+ * in `plans` (matched on the plan slug/name).
+ */
+export function resolveSubscriptionPrice(
+  sub: Subscription,
+  plans: Plan[],
+): number | undefined {
+  if (sub.price != null) return sub.price;
+  const name = sub.planName;
+  if (name) {
+    for (const p of plans) {
+      if (p.id === name || p.name === name) return p.price;
+    }
+  }
+  return undefined;
+}
+
+// ── Lifecycle helpers (parity with the Python SDK's model properties) ────────
+
+/** A pending end-of-term cancel: `cancelledDate` set while still ACTIVE (keeps
+ * access until the date). Mirrors the storefront/portal "Cancelling" logic. */
+export function isCancellationScheduled(sub: Subscription): boolean {
+  return sub.cancelledDate != null && (sub.state ?? '').toUpperCase() === 'ACTIVE';
+}
+
+/** Currently paused (Kill Bill BLOCKED). A *scheduled* future pause instead
+ * lives in `sub.events` as a future PAUSE_* event. */
+export function isPaused(sub: Subscription): boolean {
+  return (sub.state ?? '').toUpperCase() === 'BLOCKED';
+}
+
+/** True when the plan is family/group-enabled. */
+export function isFamilyPlan(plan: Plan): boolean {
+  return Boolean(plan.familyConfig?.enabled);
+}
+
+/** True when the plan charges the first period pro-rata. */
+export function isProRata(plan: Plan): boolean {
+  return (plan.billingMode ?? '').toLowerCase() === 'pro_rata';
+}
+
+/** The zero-total, zero-item invoice Kill Bill commits on subscription setup
+ * (findings #1) — handy to filter out of a customer-facing list. */
+export function isEmptyInvoice(inv: Invoice): boolean {
+  return (inv.amount ?? 0) === 0 && inv.items.length === 0;
 }

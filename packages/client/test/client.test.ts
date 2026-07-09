@@ -51,7 +51,8 @@ describe('UbilltuClient', () => {
   it('throws UbilltuAuthError when calling an authed endpoint before login', async () => {
     const f = fakeFetch(() => ({ json: {} }));
     const client = new UbilltuClient({ storefrontSlug: 'demo', fetch: f.fetch });
-    await expect(client.listPlans()).rejects.toBeInstanceOf(UbilltuAuthError);
+    // listPlans is public; use a genuinely authed endpoint.
+    await expect(client.listSubscriptions()).rejects.toBeInstanceOf(UbilltuAuthError);
   });
 
   it('maps a non-2xx response to UbilltuApiError (nested error.message)', async () => {
